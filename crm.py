@@ -1,57 +1,70 @@
-# crm.py
+import datetime
 from storage import (
-    init_users_table,
-    authenticate_user,
-    fetch_all_users,
-    create_user_db,
-    update_user_permissions_db,
-    change_own_password_db,
-    admin_reset_password_db,
-    delete_user_db,
-    insert_lead,
-    fetch_all_leads,
-    search_leads_db,
+    add_lead_db,
+    get_all_leads_db,
     update_lead_db,
     delete_lead_db
 )
 
-def setup_database():
-    init_users_table()
+VALID_STATUSES = ["Lead", "Contacted", "Proposal Sent", "Negotiation", "Closed Won", "Closed Lost"]
 
-def login_user(username, password):
-    return authenticate_user(username, password)
+def create_lead(name: str, number: str, status: str, follow_up_date, notes: str):
+    if not name or not name.strip():
+        raise ValueError("Customer name is required.")
+    if not number or not number.strip():
+        raise ValueError("Phone number is required.")
+    add_lead_db(name.strip(), number.strip(), status, follow_up_date, notes.strip())
 
-def get_users():
-    return fetch_all_users()
+def is_due_or_overdue(lead: dict) -> bool:
+    """Checks if an active lead's follow-up date is today or already passed."""
+    if lead["status"] in ("Closed Won", "Closed Lost"):
+        return False
+    f_date = lead.get("follow_up_date")
+    if not f_date:
+        return False
+    if isinstance(f_date, str):
+        f_date = datetime.date.fromisoformat(f_date)
+    return f_date <= datetime.date.today()
 
-def add_user(username, password, role, can_add, can_edit, can_delete, can_export, can_analytics):
-    create_user_db(username, password, role, can_add, can_edit, can_delete, can_export, can_analytics)
+def fetch_leads(search_query: str = "", status_filter: str = "All", kpi_filter: str = "Total Pipeline"):
+    leads = get_all_leads_db()
 
-def update_user_access(user_id, role, can_add, can_edit, can_delete, can_export, can_analytics):
-    update_user_permissions_db(user_id, role, can_add, can_edit, can_delete, can_export, can_analytics)
+    # 1. Apply KPI Card Filter first
+    if kpi_filter == "Active Leads":
+        leads = [l for l in leads if l["status"] not in ("Closed Won", "Closed Lost")]
+    elif kpi_filter == "Won Deals":
+        leads = [l for l in leads if l["status"] == "Closed Won"]
+    elif kpi_filter == "Due / Overdue":
+        leads = [l for l in leads if is_due_or_overdue(l)]
 
-def change_own_password(user_id, current_password, new_password):
-    return change_own_password_db(user_id, current_password, new_password)
+    # 2. Apply Dropdown Status Filter
+    if status_filter != "All":
+        leads = [l for l in leads if l["status"] == status_filter]
 
-def reset_user_password_by_admin(user_id, new_password):
-    admin_reset_password_db(user_id, new_password)
+    # 3. Apply Search Query
+    if search_query.strip():
+        q = search_query.strip().lower()
+        leads = [
+            l for l in leads
+            if q in l["name"].lower() or q in l["number"].lower() or q in (l["notes"] or "").lower()
+        ]
+    return leads
 
-def remove_user(user_id):
-    delete_user_db(user_id)
+def modify_lead(lead_id: int, status: str, follow_up_date, notes: str):
+    update_lead_db(lead_id, status, follow_up_date, notes.strip())
 
-def get_leads():
-    return fetch_all_leads()
-
-def add_lead(name, number, status="Lead", follow_up_date=None, notes=""):
-    insert_lead(name, number, status, follow_up_date, notes)
-
-def search_lead(keyword):
-    return search_leads_db(keyword)
-
-def update_lead(lead_id, old_lead, new_name, new_number, new_status, new_date, new_notes):
-    final_name = new_name.strip() if new_name.strip() else old_lead["name"]
-    final_number = new_number.strip() if new_number.strip() else old_lead["number"]
-    update_lead_db(lead_id, final_name, final_number, new_status, new_date, new_notes.strip())
-
-def delete_lead(lead_id):
+def remove_lead(lead_id: int):
     delete_lead_db(lead_id)
+
+def get_pipeline_metrics():
+    leads = get_all_leads_db()
+    total = len(leads)
+    won = sum(1 for l in leads if l["status"] == "Closed Won")
+    active = sum(1 for l in leads if l["status"] not in ("Closed Won", "Closed Lost"))
+    due_overdue = sum(1 for l in leads if is_due_or_overdue(l))
+    return {
+        "total": total,
+        "active": active,
+        "won": won,
+        "due_overdue": due_overdue
+    }
