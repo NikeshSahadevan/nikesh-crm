@@ -1,9 +1,8 @@
 # 🚀 Nikesh CRM — Full-Stack Sales Pipeline & Lead Management System
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Open%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://nikesh-crm-acntxsvreyrm97dvvtln2p.streamlit.app/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Open%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://nikesh-crm.streamlit.app/)
 
-🔗 **Live Application:** [https://nikesh-crm-acntxsvreyrm97dvvtln2p.streamlit.app/](https://nikesh-crm-acntxsvreyrm97dvvtln2p.streamlit.app/)
-
+🔗 **Live Application:** [https://nikesh-crm.streamlit.app/](https://nikesh-crm.streamlit.app/)
 
 
 A role-based, full-stack Customer Relationship Management (CRM) web application built with **Python**, **Streamlit**, and **PostgreSQL**. Designed for sales teams to track leads, manage follow-up schedules, analyze pipeline conversion metrics, and export formatted Excel reports.
