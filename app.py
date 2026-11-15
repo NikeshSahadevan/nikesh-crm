@@ -1,8 +1,18 @@
 import io
+import re
+import urllib.parse
 import datetime
 import streamlit as st
 import pandas as pd
-from storage import init_db, verify_user, create_user, get_all_users
+from storage import (
+    init_db,
+    verify_user,
+    create_user,
+    update_user_access,
+    delete_user_db,
+    get_all_users,
+    ALL_PERMISSIONS
+)
 from crm import (
     VALID_STATUSES,
     create_lead,
@@ -18,7 +28,29 @@ st.set_page_config(page_title="Nikesh CRM", page_icon="🚀", layout="wide")
 # Initialize database tables & default admin on startup
 init_db()
 
-# Helper function to convert DataFrame to Excel (.xlsx) bytes
+PERMISSION_LABELS = {
+    "export_excel": "📥 Export Excel (.xlsx)",
+    "view_analytics": "📈 Pipeline Analytics & Charts",
+    "add_lead": "➕ Add New Lead",
+    "update_lead": "✏️ Update Existing Lead",
+    "delete_lead": "🗑️ Delete Lead"
+}
+
+def make_whatsapp_link(name: str, phone: str) -> str:
+    """Generates a reliable WhatsApp Web/App click-to-chat URL."""
+    digits = re.sub(r"\D", "", str(phone or "")).lstrip("0")
+    if not digits:
+        return ""
+    # Auto-prepend country code if local format is entered (8 digits = Oman 968, 10 digits = India 91)
+    if len(digits) == 8:
+        digits = "968" + digits
+    elif len(digits) == 10:
+        digits = "91" + digits
+
+    msg = f"Hi {name}, following up regarding your inquiry. How can I assist you further?"
+    encoded_msg = urllib.parse.quote(msg)
+    return f"https://api.whatsapp.com/send?phone={digits}&text={encoded_msg}"
+
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -28,7 +60,6 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
 # Custom CSS for Centered Login, Gradient KPI Cards & Mobile Visibility
 st.markdown("""
 <style>
-    /* Login Banner - Centered */
     .login-banner {
         background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 60%, #2563EB 100%);
         padding: 1.6rem 1.5rem;
@@ -52,7 +83,6 @@ st.markdown("""
         text-align: center;
     }
 
-    /* Dashboard Header Banner */
     .crm-banner {
         background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 60%, #2563EB 100%);
         padding: 1.2rem 1.5rem;
@@ -73,7 +103,6 @@ st.markdown("""
         color: #DBEAFE;
     }
 
-    /* 4 Eye-Catching Gradient KPI Buttons */
     div[data-testid="stHorizontalBlock"]:has(.kpi-marker) > div:nth-child(1) button {
         background: linear-gradient(135deg, #1D4ED8 0%, #3B82F6 100%) !important;
         color: #FFFFFF !important;
@@ -111,7 +140,6 @@ st.markdown("""
         box-shadow: 0 6px 15px rgba(185, 28, 28, 0.32) !important;
     }
 
-    /* Crisp Bold White Text inside KPI Cards */
     div[data-testid="stHorizontalBlock"]:has(.kpi-marker) button p {
         color: #FFFFFF !important;
         font-size: 1.05rem !important;
@@ -124,7 +152,6 @@ st.markdown("""
         filter: brightness(1.07) !important;
     }
 
-    /* Active Filter Pill */
     .filter-badge {
         background-color: #EFF6FF;
         border-left: 4px solid #2563EB;
@@ -168,7 +195,7 @@ if st.session_state.reset_del:
     st.session_state.del_confirm_chk = False
     st.session_state.reset_del = False
 
-# ---------------- LOGIN SCREEN (CENTERED) ----------------
+# ---------------- LOGIN SCREEN ----------------
 if st.session_state.user is None:
     col_l, col_m, col_r = st.columns([1, 1.8, 1])
     with col_m:
@@ -195,9 +222,18 @@ if st.session_state.user is None:
 
 # ---------------- MAIN DASHBOARD ----------------
 current_user = st.session_state.user
+is_admin = current_user.get("role") == "Admin"
+user_perms = ALL_PERMISSIONS if is_admin else current_user.get("permissions_list", [])
+
 with st.sidebar:
     st.markdown(f"### 👤 {current_user['username'].capitalize()}")
-    st.caption(f"Access Level: **{current_user['role']}**")
+    if is_admin:
+        st.success("👑 Role: **Admin (Full Access)**")
+    else:
+        st.info(f"🛡️ Role: **{current_user['role']}**")
+        st.caption("**Enabled Permissions:**")
+        for p in user_perms:
+            st.caption(f"• {PERMISSION_LABELS.get(p, p)}")
     st.divider()
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.user = None
@@ -209,7 +245,7 @@ with st.sidebar:
 st.markdown("""
 <div class="crm-banner">
     <h1>📊 Nikesh CRM Dashboard</h1>
-    <p>Tap any colored KPI card below to filter leads, analyze charts, or export to Excel</p>
+    <p>Tap any colored KPI card below to filter leads, analyze charts, or manage your pipeline</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -234,23 +270,28 @@ with c4:
     if st.button(f"⏰ DUE / OVERDUE\n{metrics['due_overdue']} Pending", key="btn_due", use_container_width=True):
         st.session_state.kpi_filter = "Due / Overdue"
 
-# Separate Navigation Tabs for Clean Operations
-tabs = [
-    "📋 Leads & Export",
-    "📈 Pipeline Analytics",
-    "➕ Add Lead",
-    "✏️ Update Lead",
-    "🗑️ Delete Lead"
-]
-if current_user["role"] == "Admin":
-    tabs.append("🔐 Users")
+# Build Tabs Dynamically Based on User Permissions
+dynamic_tabs = [("📋 Leads Pipeline", "view_leads")]
+if "view_analytics" in user_perms:
+    dynamic_tabs.append(("📈 Pipeline Analytics", "view_analytics"))
+if "add_lead" in user_perms:
+    dynamic_tabs.append(("➕ Add Lead", "add_lead"))
+if "update_lead" in user_perms:
+    dynamic_tabs.append(("✏️ Update Lead", "update_lead"))
+if "delete_lead" in user_perms:
+    dynamic_tabs.append(("🗑️ Delete Lead", "delete_lead"))
+if is_admin:
+    dynamic_tabs.append(("👑 Admin Panel", "admin_panel"))
 
-tab_objs = st.tabs(tabs)
+tab_labels = [t[0] for t in dynamic_tabs]
+tab_keys = [t[1] for t in dynamic_tabs]
+tab_objs = st.tabs(tab_labels)
+tab_map = dict(zip(tab_keys, tab_objs))
 
 # =========================================================
-# TAB 1: VIEW LEADS, SEARCH, FILTER & EXCEL EXPORT
+# TAB: VIEW LEADS, SEARCH, FILTER & EXCEL EXPORT
 # =========================================================
-with tab_objs[0]:
+with tab_map["view_leads"]:
     active_kpi = st.session_state.kpi_filter
     col_badge, col_reset = st.columns([4, 1])
     with col_badge:
@@ -280,7 +321,8 @@ with tab_objs[0]:
         df["Follow-Up Alert"] = df.apply(
             lambda r: "🔴 Due / Overdue" if is_due_or_overdue(r) else "🟢 On Track", axis=1
         )
-        display_cols = ["id", "Follow-Up Alert", "name", "number", "status", "follow_up_date", "notes"]
+        df["WhatsApp"] = df.apply(lambda r: make_whatsapp_link(r["name"], r["number"]), axis=1)
+        display_cols = ["id", "Follow-Up Alert", "name", "number", "WhatsApp", "status", "follow_up_date", "notes"]
         clean_df = df[display_cols].rename(columns={
             "id": "ID",
             "name": "Customer Name",
@@ -290,173 +332,259 @@ with tab_objs[0]:
             "notes": "Notes"
         })
 
-        st.dataframe(clean_df, use_container_width=True, hide_index=True)
-
-        # Excel (.xlsx) Export Button
-        excel_data = to_excel_bytes(clean_df)
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        st.download_button(
-            label="📥 Export Filtered Leads to Excel (.xlsx)",
-            data=excel_data,
-            file_name=f"Nikesh_CRM_{active_kpi.replace(' ', '_').replace('/', '-')}_{today_str}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
+        st.dataframe(
+            clean_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={"WhatsApp": st.column_config.LinkColumn("WhatsApp", display_text="💬 Chat")}
         )
+
+        if "export_excel" in user_perms:
+            excel_data = to_excel_bytes(clean_df.drop(columns=["WhatsApp"]))
+            today_str = datetime.date.today().strftime("%Y-%m-%d")
+            st.download_button(
+                label="📥 Export Filtered Leads to Excel (.xlsx)",
+                data=excel_data,
+                file_name=f"Nikesh_CRM_{active_kpi.replace(' ', '_').replace('/', '-')}_{today_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
     else:
-        st.info(f"No leads found under '{active_kpi}'. Click 'Show All' or add a new lead.")
+        st.info(f"No leads found under '{active_kpi}'.")
 
 # =========================================================
-# TAB 2: PIPELINE CHARTS & VISUAL ANALYTICS
+# TAB: PIPELINE CHARTS & VISUAL ANALYTICS
 # =========================================================
-with tab_objs[1]:
-    st.subheader("📈 Sales Pipeline Visual Analytics")
-    all_leads = fetch_leads("", "All", "Total Pipeline")
-    if all_leads:
-        df_all = pd.DataFrame(all_leads)
-        chart_c1, chart_c2 = st.columns(2)
+if "view_analytics" in tab_map:
+    with tab_map["view_analytics"]:
+        st.subheader("📈 Sales Pipeline Visual Analytics")
+        all_leads = fetch_leads("", "All", "Total Pipeline")
+        if all_leads:
+            df_all = pd.DataFrame(all_leads)
+            chart_c1, chart_c2 = st.columns(2)
 
-        with chart_c1:
-            st.markdown("**Leads Count by Sales Stage**")
-            stage_counts = (
-                df_all["status"]
-                .value_counts()
-                .reindex(VALID_STATUSES, fill_value=0)
-            )
-            st.bar_chart(stage_counts, color="#2563EB")
+            with chart_c1:
+                st.markdown("**Leads Count by Sales Stage**")
+                stage_counts = (
+                    df_all["status"]
+                    .value_counts()
+                    .reindex(VALID_STATUSES, fill_value=0)
+                )
+                st.bar_chart(stage_counts, color="#2563EB")
 
-        with chart_c2:
-            st.markdown("**Follow-Up Urgency Breakdown**")
-            df_all["Urgency"] = df_all.apply(
-                lambda r: "Due / Overdue" if is_due_or_overdue(r) else (
-                    "Closed" if r["status"] in ("Closed Won", "Closed Lost") else "Upcoming / On Track"
-                ),
-                axis=1
-            )
-            urgency_counts = df_all["Urgency"].value_counts()
-            st.bar_chart(urgency_counts, color="#0F766E")
+            with chart_c2:
+                st.markdown("**Follow-Up Urgency Breakdown**")
+                df_all["Urgency"] = df_all.apply(
+                    lambda r: "Due / Overdue" if is_due_or_overdue(r) else (
+                        "Closed" if r["status"] in ("Closed Won", "Closed Lost") else "Upcoming / On Track"
+                    ),
+                    axis=1
+                )
+                urgency_counts = df_all["Urgency"].value_counts()
+                st.bar_chart(urgency_counts, color="#0F766E")
+
+            st.divider()
+            st.markdown("**Stage Distribution Summary Table**")
+            summary_df = stage_counts.reset_index()
+            summary_df.columns = ["Pipeline Stage", "Lead Count"]
+            summary_df["Share (%)"] = ((summary_df["Lead Count"] / len(df_all)) * 100).round(1)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Add some leads first to generate pipeline charts and analytics.")
+
+# =========================================================
+# TAB: ADD NEW LEAD
+# =========================================================
+if "add_lead" in tab_map:
+    with tab_map["add_lead"]:
+        st.subheader("➕ Add New Customer Lead")
+        with st.form("add_lead_form", clear_on_submit=True):
+            name = st.text_input("Customer Name *")
+            number = st.text_input("Phone Number *")
+            status = st.selectbox("Initial Status", VALID_STATUSES)
+            follow_up = st.date_input("Follow-up Date", value=datetime.date.today())
+            notes = st.text_area("Notes")
+            if st.form_submit_button("✅ Save New Lead", use_container_width=True, type="primary"):
+                try:
+                    create_lead(name, number, status, follow_up, notes)
+                    st.success(f"Added lead: {name}")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
+
+# =========================================================
+# TAB: UPDATE LEAD
+# =========================================================
+if "update_lead" in tab_map:
+    with tab_map["update_lead"]:
+        st.subheader("✏️ Update Existing Lead")
+
+        if st.session_state.upd_flash:
+            st.success(st.session_state.upd_flash)
+            st.session_state.upd_flash = None
+
+        all_leads_upd = fetch_leads("", "All", "Total Pipeline")
+        if all_leads_upd:
+            lead_map_upd = {f"#{l['id']} — {l['name']} ({l['number']}) [{l['status']}]": l for l in all_leads_upd}
+            upd_options = ["-- Select a Lead --"] + list(lead_map_upd.keys())
+
+            if st.session_state.upd_select not in upd_options:
+                st.session_state.upd_select = "-- Select a Lead --"
+
+            selected_upd_label = st.selectbox("Choose Lead to Update", upd_options, key="upd_select")
+
+            if selected_upd_label != "-- Select a Lead --":
+                sel_u = lead_map_upd[selected_upd_label]
+                current_status = sel_u.get("status") or VALID_STATUSES[0]
+                status_options = VALID_STATUSES if current_status in VALID_STATUSES else [current_status] + VALID_STATUSES
+
+                with st.form(f"separate_update_form_{sel_u['id']}"):
+                    new_status = st.selectbox("Update Stage", status_options, index=status_options.index(current_status))
+                    default_date = sel_u["follow_up_date"] if sel_u["follow_up_date"] else datetime.date.today()
+                    new_date = st.date_input("Update Follow-up Date", value=default_date)
+                    new_notes = st.text_area("Update Notes", value=sel_u["notes"] or "")
+                    if st.form_submit_button("💾 Save Lead Changes", use_container_width=True, type="primary"):
+                        modify_lead(sel_u["id"], new_status, new_date, new_notes)
+                        st.session_state.upd_flash = f"✅ Lead #{sel_u['id']} ({sel_u['name']}) updated to '{new_status}'! Form reset."
+                        st.session_state.reset_upd = True
+                        st.rerun()
+            else:
+                st.info("👆 Select a lead from the dropdown above to edit its stage, follow-up date, or notes.")
+        else:
+            st.info("No leads available to update.")
+
+# =========================================================
+# TAB: DELETE LEAD
+# =========================================================
+if "delete_lead" in tab_map:
+    with tab_map["delete_lead"]:
+        st.subheader("🗑️ Delete a Lead")
+
+        if st.session_state.del_flash:
+            st.success(st.session_state.del_flash)
+            st.session_state.del_flash = None
+
+        all_leads_del = fetch_leads("", "All", "Total Pipeline")
+        if all_leads_del:
+            lead_map_del = {f"#{l['id']} — {l['name']} ({l['number']}) [{l['status']}]": l for l in all_leads_del}
+            del_options = ["-- Select a Lead --"] + list(lead_map_del.keys())
+
+            if st.session_state.del_select not in del_options:
+                st.session_state.del_select = "-- Select a Lead --"
+
+            selected_del_label = st.selectbox("Choose Lead to Delete", del_options, key="del_select")
+
+            if selected_del_label != "-- Select a Lead --":
+                sel_d = lead_map_del[selected_del_label]
+                st.warning(f"⚠️ You are about to permanently delete **#{sel_d['id']} - {sel_d['name']}** ({sel_d['status']}). This action cannot be undone.")
+                confirm_del = st.checkbox("Yes, I confirm I want to delete this lead permanently", key="del_confirm_chk")
+                if st.button("🗑️ Confirm & Delete Lead", type="primary", disabled=not confirm_del):
+                    remove_lead(sel_d["id"])
+                    st.session_state.del_flash = f"🗑️ Lead #{sel_d['id']} ({sel_d['name']}) deleted permanently!"
+                    st.session_state.reset_del = True
+                    st.rerun()
+            else:
+                st.info("👆 Select a lead from the dropdown above if you want to remove it.")
+        else:
+            st.info("No leads available to delete.")
+
+# =========================================================
+# TAB: ADMIN PANEL (FULL USER & ACCESS CONTROL)
+# =========================================================
+if is_admin and "admin_panel" in tab_map:
+    with tab_map["admin_panel"]:
+        st.subheader("👑 Admin Control Center — User & Access Management")
+        st.caption("Create users, set passwords, and control exact feature permissions for each team member.")
+
+        col_create, col_edit = st.columns(2)
+
+        # 1. CREATE NEW USER WITH CUSTOM PERMISSIONS
+        with col_create:
+            st.markdown("### ➕ Create New User")
+            with st.form("create_user_form", clear_on_submit=True):
+                u_name = st.text_input("Username *")
+                u_pass = st.text_input("Password *", type="password")
+                u_role = st.selectbox("Role", ["Staff", "Admin"])
+                st.markdown("**Select Allowed Features (for Staff):**")
+                p_export = st.checkbox(PERMISSION_LABELS["export_excel"], value=True)
+                p_charts = st.checkbox(PERMISSION_LABELS["view_analytics"], value=True)
+                p_add = st.checkbox(PERMISSION_LABELS["add_lead"], value=True)
+                p_upd = st.checkbox(PERMISSION_LABELS["update_lead"], value=True)
+                p_del = st.checkbox(PERMISSION_LABELS["delete_lead"], value=False)
+
+                if st.form_submit_button("✅ Create User Account", use_container_width=True, type="primary"):
+                    if u_name.strip() and u_pass.strip():
+                        selected_perms = []
+                        if p_export: selected_perms.append("export_excel")
+                        if p_charts: selected_perms.append("view_analytics")
+                        if p_add: selected_perms.append("add_lead")
+                        if p_upd: selected_perms.append("update_lead")
+                        if p_del: selected_perms.append("delete_lead")
+                        try:
+                            create_user(u_name.strip(), u_pass.strip(), u_role, selected_perms)
+                            st.success(f"User '{u_name.strip()}' created successfully!")
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Could not create user: {ex}")
+                    else:
+                        st.error("Username and password are required.")
+
+        # 2. MODIFY EXISTING USER PERMISSIONS / PASSWORD / DELETE
+        with col_edit:
+            st.markdown("### 🛠️ Edit User Access & Password")
+            users_list = get_all_users()
+            editable_users = [u for u in users_list if u["username"] != current_user["username"]]
+
+            if editable_users:
+                user_options = {f"#{u['id']} — {u['username']} ({u['role']})": u for u in editable_users}
+                sel_u_label = st.selectbox("Select User to Manage", list(user_options.keys()))
+                target_u = user_options[sel_u_label]
+                t_perms = target_u.get("permissions_list", [])
+
+                with st.form(f"edit_user_form_{target_u['id']}"):
+                    edit_role = st.selectbox("Role", ["Staff", "Admin"], index=0 if target_u["role"] == "Staff" else 1)
+                    reset_pwd = st.text_input("New Password (leave blank to keep current)", type="password")
+                    st.markdown("**Update Allowed Features:**")
+                    ep_export = st.checkbox(PERMISSION_LABELS["export_excel"], value=("export_excel" in t_perms))
+                    ep_charts = st.checkbox(PERMISSION_LABELS["view_analytics"], value=("view_analytics" in t_perms))
+                    ep_add = st.checkbox(PERMISSION_LABELS["add_lead"], value=("add_lead" in t_perms))
+                    ep_upd = st.checkbox(PERMISSION_LABELS["update_lead"], value=("update_lead" in t_perms))
+                    ep_del = st.checkbox(PERMISSION_LABELS["delete_lead"], value=("delete_lead" in t_perms))
+
+                    c_save, c_remove = st.columns(2)
+                    save_u_btn = c_save.form_submit_button("💾 Save Access", use_container_width=True, type="primary")
+                    del_u_btn = c_remove.form_submit_button("🗑️ Delete User", use_container_width=True)
+
+                    if save_u_btn:
+                        new_perms = []
+                        if ep_export: new_perms.append("export_excel")
+                        if ep_charts: new_perms.append("view_analytics")
+                        if ep_add: new_perms.append("add_lead")
+                        if ep_upd: new_perms.append("update_lead")
+                        if ep_del: new_perms.append("delete_lead")
+                        update_user_access(target_u["id"], edit_role, new_perms, reset_pwd)
+                        st.success(f"Updated access for '{target_u['username']}'!")
+                        st.rerun()
+
+                    if del_u_btn:
+                        delete_user_db(target_u["id"])
+                        st.warning(f"Deleted user '{target_u['username']}'.")
+                        st.rerun()
+            else:
+                st.info("No other users created yet. Create a Staff/Demo user on the left to manage their permissions.")
 
         st.divider()
-        st.markdown("**Stage Distribution Summary Table**")
-        summary_df = stage_counts.reset_index()
-        summary_df.columns = ["Pipeline Stage", "Lead Count"]
-        summary_df["Share (%)"] = ((summary_df["Lead Count"] / len(df_all)) * 100).round(1)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("Add some leads first to generate pipeline charts and analytics.")
-
-# =========================================================
-# TAB 3: ADD NEW LEAD
-# =========================================================
-with tab_objs[2]:
-    st.subheader("➕ Add New Customer Lead")
-    with st.form("add_lead_form", clear_on_submit=True):
-        name = st.text_input("Customer Name *")
-        number = st.text_input("Phone Number *")
-        status = st.selectbox("Initial Status", VALID_STATUSES)
-        follow_up = st.date_input("Follow-up Date", value=datetime.date.today())
-        notes = st.text_area("Notes")
-        if st.form_submit_button("✅ Save New Lead", use_container_width=True, type="primary"):
-            try:
-                create_lead(name, number, status, follow_up, notes)
-                st.success(f"Added lead: {name}")
-                st.rerun()
-            except ValueError as e:
-                st.error(str(e))
-
-# =========================================================
-# TAB 4: SEPARATE UPDATE LEAD TAB (AUTO-RESET AFTER SAVE)
-# =========================================================
-with tab_objs[3]:
-    st.subheader("✏️ Update Existing Lead")
-
-    if st.session_state.upd_flash:
-        st.success(st.session_state.upd_flash)
-        st.session_state.upd_flash = None
-
-    all_leads_upd = fetch_leads("", "All", "Total Pipeline")
-    if all_leads_upd:
-        lead_map_upd = {f"#{l['id']} — {l['name']} ({l['number']}) [{l['status']}]": l for l in all_leads_upd}
-        upd_options = ["-- Select a Lead --"] + list(lead_map_upd.keys())
-
-        if st.session_state.upd_select not in upd_options:
-            st.session_state.upd_select = "-- Select a Lead --"
-
-        selected_upd_label = st.selectbox("Choose Lead to Update", upd_options, key="upd_select")
-
-        if selected_upd_label != "-- Select a Lead --":
-            sel_u = lead_map_upd[selected_upd_label]
-            current_status = sel_u.get("status") or VALID_STATUSES[0]
-            status_options = VALID_STATUSES if current_status in VALID_STATUSES else [current_status] + VALID_STATUSES
-
-            with st.form(f"separate_update_form_{sel_u['id']}"):
-                new_status = st.selectbox("Update Stage", status_options, index=status_options.index(current_status))
-                default_date = sel_u["follow_up_date"] if sel_u["follow_up_date"] else datetime.date.today()
-                new_date = st.date_input("Update Follow-up Date", value=default_date)
-                new_notes = st.text_area("Update Notes", value=sel_u["notes"] or "")
-                if st.form_submit_button("💾 Save Lead Changes", use_container_width=True, type="primary"):
-                    modify_lead(sel_u["id"], new_status, new_date, new_notes)
-                    st.session_state.upd_flash = f"✅ Lead #{sel_u['id']} ({sel_u['name']}) updated to '{new_status}'! Form reset for next update."
-                    st.session_state.reset_upd = True
-                    st.rerun()
-        else:
-            st.info("👆 Select a lead from the dropdown above to edit its stage, follow-up date, or notes.")
-    else:
-        st.info("No leads available to update.")
-
-# =========================================================
-# TAB 5: SEPARATE DELETE LEAD TAB (AUTO-RESET AFTER DELETE)
-# =========================================================
-with tab_objs[4]:
-    st.subheader("🗑️ Delete a Lead")
-
-    if st.session_state.del_flash:
-        st.success(st.session_state.del_flash)
-        st.session_state.del_flash = None
-
-    all_leads_del = fetch_leads("", "All", "Total Pipeline")
-    if all_leads_del:
-        lead_map_del = {f"#{l['id']} — {l['name']} ({l['number']}) [{l['status']}]": l for l in all_leads_del}
-        del_options = ["-- Select a Lead --"] + list(lead_map_del.keys())
-
-        if st.session_state.del_select not in del_options:
-            st.session_state.del_select = "-- Select a Lead --"
-
-        selected_del_label = st.selectbox("Choose Lead to Delete", del_options, key="del_select")
-
-        if selected_del_label != "-- Select a Lead --":
-            sel_d = lead_map_del[selected_del_label]
-            st.warning(f"⚠️ You are about to permanently delete **#{sel_d['id']} - {sel_d['name']}** ({sel_d['status']}). This action cannot be undone.")
-            confirm_del = st.checkbox("Yes, I confirm I want to delete this lead permanently", key="del_confirm_chk")
-            if st.button("🗑️ Confirm & Delete Lead", type="primary", disabled=not confirm_del):
-                remove_lead(sel_d["id"])
-                st.session_state.del_flash = f"🗑️ Lead #{sel_d['id']} ({sel_d['name']}) deleted permanently!"
-                st.session_state.reset_del = True
-                st.rerun()
-        else:
-            st.info("👆 Select a lead from the dropdown above if you want to remove it.")
-    else:
-        st.info("No leads available to delete.")
-
-# =========================================================
-# TAB 6: ADMIN USER MANAGEMENT
-# =========================================================
-if current_user["role"] == "Admin":
-    with tab_objs[5]:
-        st.subheader("👥 Create Staff / Demo User Account")
-        with st.form("create_user_form", clear_on_submit=True):
-            u_name = st.text_input("New Username")
-            u_pass = st.text_input("New Password", type="password")
-            u_role = st.selectbox("Role", ["Staff", "Admin"])
-            if st.form_submit_button("➕ Create User", use_container_width=True, type="primary"):
-                if u_name.strip() and u_pass:
-                    try:
-                        create_user(u_name.strip(), u_pass, u_role)
-                        st.success(f"User '{u_name}' created as {u_role}!")
-                        st.rerun()
-                    except Exception as ex:
-                        st.error(f"Could not create user: {ex}")
-                else:
-                    st.error("Username and password are required.")
-
-        st.subheader("Existing Users")
-        st.dataframe(pd.DataFrame(get_all_users())[["id", "username", "role", "created_at"]], use_container_width=True, hide_index=True)
+        st.markdown("### 📋 All Registered Users & Permissions")
+        all_u_rows = []
+        for u in get_all_users():
+            perms_readable = "Full Access (All Features)" if u["role"] == "Admin" else ", ".join(
+                [PERMISSION_LABELS.get(p, p) for p in u.get("permissions_list", [])]
+            ) or "View Leads Only"
+            all_u_rows.append({
+                "ID": u["id"],
+                "Username": u["username"],
+                "Role": u["role"],
+                "Allowed Access": perms_readable,
+                "Created At": u["created_at"]
+            })
+        st.dataframe(pd.DataFrame(all_u_rows), use_container_width=True, hide_index=True)
