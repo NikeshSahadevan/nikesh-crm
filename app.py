@@ -20,7 +20,8 @@ from crm import (
     modify_lead,
     remove_lead,
     get_pipeline_metrics,
-    is_due_or_overdue
+    is_due_or_overdue,
+    make_whatsapp_link
 )
 
 st.set_page_config(page_title="Nikesh CRM", page_icon="🚀", layout="wide")
@@ -36,20 +37,6 @@ PERMISSION_LABELS = {
     "delete_lead": "🗑️ Delete Lead"
 }
 
-def make_whatsapp_link(name: str, phone: str) -> str:
-    """Generates a reliable WhatsApp Web/App click-to-chat URL."""
-    digits = re.sub(r"\D", "", str(phone or "")).lstrip("0")
-    if not digits:
-        return ""
-    # Auto-prepend country code if local format is entered (8 digits = Oman 968, 10 digits = India 91)
-    if len(digits) == 8:
-        digits = "968" + digits
-    elif len(digits) == 10:
-        digits = "91" + digits
-
-    msg = f"Hi {name}, following up regarding your inquiry. How can I assist you further?"
-    encoded_msg = urllib.parse.quote(msg)
-    return f"https://api.whatsapp.com/send?phone={digits}&text={encoded_msg}"
 
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()

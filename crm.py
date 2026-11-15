@@ -1,3 +1,5 @@
+import re
+import urllib.parse
 import datetime
 from storage import (
     add_lead_db,
@@ -68,3 +70,14 @@ def get_pipeline_metrics():
         "won": won,
         "due_overdue": due_overdue
     }
+
+def make_whatsapp_link(name: str, phone: str) -> str:
+    digits = re.sub(r"\D", "", str(phone or "")).lstrip("0")
+    if not digits:
+        return ""
+    if len(digits) == 8:
+        digits = "968" + digits
+    elif len(digits) == 10:
+        digits = "91" + digits
+    msg = urllib.parse.quote(f"Hi {name}, following up regarding your inquiry. How can I assist you further?")
+    return f"https://api.whatsapp.com/send?phone={digits}&text={msg}"
